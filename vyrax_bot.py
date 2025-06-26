@@ -1,29 +1,18 @@
-import logging
-import json
 import os
-from dotenv import load_dotenv
-from web3 import Web3
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
+import json
+import logging
 from flask import Flask
 from threading import Thread
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from web3 import Web3
+from dotenv import load_dotenv
 
-# ========================
-# CARGA VARIABLES DE .env
-# ========================
 load_dotenv()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PRIVATE_KEY = os.getenv("PRIVATE_KEY")
 
-# ========================
-# CONFIGURACIÓN FIJA
-# ========================
 SENDER_ADDRESS = "0x4756A2f0E8094467fE9507d8615243D7Cd876bFe"
 CONTRACT_ADDRESS = "0x899F6eB2cF9ffa77fb0aF0F5dC4e13a6302F5c2C"
 BSC_RPC = "https://bsc-dataseed1.binance.org"
@@ -34,7 +23,6 @@ DATA_FILE = "claim_data.json"
 
 web3 = Web3(Web3.HTTPProvider(BSC_RPC))
 
-# ABI BEP-20
 BEP20_ABI = [
     {
         "constant": True,
@@ -45,14 +33,20 @@ BEP20_ABI = [
     },
     {
         "constant": False,
-        "inputs": [{"name": "_to", "type": "address"}, {"name": "_value", "type": "uint256"}],
+        "inputs": [
+            {"name": "_to", "type": "address"},
+            {"name": "_value", "type": "uint256"},
+        ],
         "name": "transfer",
         "outputs": [{"name": "", "type": "bool"}],
         "type": "function",
     },
 ]
 
-contract = web3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=BEP20_ABI)
+contract = web3.eth.contract(
+    address=Web3.to_checksum_address(CONTRACT_ADDRESS),
+    abi=BEP20_ABI,
+)
 
 if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "r") as f:
@@ -66,8 +60,10 @@ def guardar_claims():
 
 def get_token_balance(address: str) -> int:
     try:
-        balance = contract.functions.balanceOf(Web3.to_checksum_address(address)).call()
-        return balance / (10 ** TOKEN_DECIMALS)
+        balance = contract.functions.balanceOf(
+            Web3.to_checksum_address(address)
+        ).call()
+        return balance / (10**TOKEN_DECIMALS)
     except:
         return 0
 
@@ -75,19 +71,22 @@ def enviar_tokens(destinatario: str, cantidad: int):
     nonce = web3.eth.get_transaction_count(SENDER_ADDRESS)
     tx = contract.functions.transfer(
         Web3.to_checksum_address(destinatario),
-        int(cantidad * (10 ** TOKEN_DECIMALS))
+        int(cantidad * (10**TOKEN_DECIMALS)),
     ).build_transaction({
         "chainId": 56,
         "gas": 100000,
         "gasPrice": web3.to_wei("5", "gwei"),
-        "nonce": nonce
+        "nonce": nonce,
     })
 
     firmado = web3.eth.account.sign_transaction(tx, PRIVATE_KEY)
     tx_hash = web3.eth.send_raw_transaction(firmado.rawTransaction)
     return tx_hash.hex()
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
 async def bienvenida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nombre = update.effective_user.first_name
@@ -138,7 +137,8 @@ async def procesar_reclamo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     balance = get_token_balance(wallet)
     if balance < MIN_TOKENS_TO_CLAIM:
-        await update.message.reply_text(f"❌ Tu wallet solo tiene {balance:.2f} Vyrax. Se requieren al menos 700.")
+        await update.message.reply_text(
+            f"❌ Tu wallet solo tiene {balance:.2f} Vyrax. Se requieren al menos 700.")
         return
 
     cantidad = 200 if invitado else 50
@@ -154,7 +154,9 @@ async def procesar_reclamo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     claims["total"] += 1
     guardar_claims()
 
-    await update.message.reply_text(f"✅ {cantidad} Vyrax enviados a {wallet}.\n🧾 TX: https://bscscan.com/tx/{tx_hash}")
+    await update.message.reply_text(
+        f"✅ {cantidad} Vyrax enviados a {wallet}.\n🧾 TX: https://bscscan.com/tx/{tx_hash}"
+    )
 
     resumen = f"{'🚀' if cantidad == 200 else '🎉'} @{username} acaba de reclamar {cantidad} Vyrax"
     resumen += f" {'(compra + invitación)' if cantidad == 200 else '(solo compra)'}\n📦 Wallet: {wallet}"
@@ -169,7 +171,7 @@ async def estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await bienvenida(update, context)
 
-def main():
+def iniciar_bot():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("estado", estado))
@@ -178,12 +180,16 @@ def main():
     print("✅ Bot Vyrax corriendo...")
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
+# ================= FLASK KEEP-ALIVE =================
+flask_app = Flask("")
 
-    # ========== FLASK PARA MANTENER 24/7 ==========
-    app_web = Flask('')
-    @app_web.route('/')
-    def home():
-        return "✅ Vyrax bot activo y funcionando 24/7."
-    Thread(target=lambda: app_web.run(host='0.0.0.0', port=8080)).start()
+@flask_app.route("/")
+def home():
+    return "✅ Vyrax bot activo y funcionando 24/7."
+
+def run():
+    flask_app.run(host="0.0.0.0", port=8080)
+
+if __name__ == "__main__":
+    Thread(target=run).start()
+    iniciar_bot()

@@ -3,13 +3,13 @@ import json
 import os
 from dotenv import load_dotenv
 from web3 import Web3
-from telegram import Update
+from telegram import Update, ChatMember
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     filters,
-    ContextTypes
+    ContextTypes,
 )
 from flask import Flask
 from threading import Thread
@@ -31,10 +31,10 @@ MAX_REWARDS = 100
 TOKEN_DECIMALS = 18
 MIN_TOKENS_TO_CLAIM = 700
 DATA_FILE = "claim_data.json"
+GRUPO_ID = -1002117642734  # reemplaza esto con el ID real de tu grupo
 
 web3 = Web3(Web3.HTTPProvider(BSC_RPC))
 
-# ABI BEP-20
 BEP20_ABI = [
     {
         "constant": True,
@@ -86,15 +86,12 @@ def enviar_tokens(destinatario: str, cantidad: int):
     tx_hash = web3.eth.send_raw_transaction(firmado.rawTransaction)
     return tx_hash.hex()
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 async def bienvenida(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nombre = update.effective_user.first_name
-    uid = str(update.effective_user.id)
     if claims["total"] >= MAX_REWARDS:
-        mensaje = f"👋 ¡Hola {nombre}! Bienvenido a Vyrax. La promoción ha terminado, pero sigue apoyando el proyecto 🐉"
+        mensaje = f"👋 ¡Hola {nombre}! Bienvenido a Vyrax. La promoción terminó, pero lee las reglas y apoya el proyecto 🐉"
     else:
         mensaje = f'''
 👋 ¡Hola {nombre}! Bienvenido a *Vyrax Comunidad* 🐉
@@ -103,12 +100,12 @@ async def bienvenida(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ✅ Ten al menos 700 Vyrax en tu wallet  
 ✅ Escribe aquí tu wallet BEP-20  
-✅ Escribe también el @ de la persona que invitaste (obligatorio para 200)  
+✅ Escribe también el @ de la persona que te invitó  
 
-📌 Si no invitas a nadie pero tienes 700 Vyrax → recibirás 50 Vyrax  
+📌 Si no invitas a nadie pero tienes 700 Vyrax → recibes 50 Vyrax  
 📌 Solo se entregan tokens a los primeros 100 participantes  
 
-🚫 No spam | 💬 Solo temas de Vyrax | 🐉 ¡Gracias por apoyar!
+🚫 No spam | 💬 Solo temas de Vyrax
 '''
     await update.message.reply_text(mensaje, parse_mode="Markdown")
 
@@ -119,29 +116,45 @@ async def procesar_reclamo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     partes = mensaje.split()
 
     if claims["total"] >= MAX_REWARDS:
-        await update.message.reply_text("🚫 Ya se han entregado todos los premios disponibles.")
-        return
+        return  # Solo da la bienvenida, no procesa más
 
     if uid in claims["usuarios"]:
-        await update.message.reply_text("⚠️ Ya has reclamado tu recompensa.")
-        return
+        return await update.message.reply_text("⚠️ Ya reclamaste tu recompensa.")
 
     if len(partes) < 1:
-        await update.message.reply_text("⚠️ Por favor escribe tu wallet (y el @ de tu invitado si aplica).")
-        return
+        return await update.message.reply_text("⚠️ Envía tu wallet y @ del invitado si aplica.")
 
     wallet = partes[0]
     invitado = partes[1] if len(partes) > 1 else None
 
     if not wallet.startswith("0x") or len(wallet) != 42:
-        await update.message.reply_text("❌ Dirección de wallet no válida.")
-        return
+        return await update.message.reply_text("❌ Dirección de wallet inválida.")
+
+    if invitado == f"@{username}":
+        return await update.message.reply_text("❌ No puedes invitarte a ti mismo.")
+
+    if invitado:
+        for datos in claims["usuarios"].values():
+            if datos["invito"] == invitado:
+                return await update.message.reply_text("❌ Ese usuario ya fue usado como invitado.")
 
     balance = get_token_balance(wallet)
     if balance < MIN_TOKENS_TO_CLAIM:
-        await update.message.reply_text(
-            f"❌ Tu wallet solo tiene {balance:.2f} Vyrax. Se requieren al menos 700.")
-        return
+        return await update.message.reply_text(
+            f"❌ Tu wallet solo tiene {balance:.2f} Vyrax. Necesitas al menos 700.")
+
+    # Verificar que ambos estén en el grupo
+    try:
+        miembro_reclamante = await context.bot.get_chat_member(GRUPO_ID, update.effective_user.id)
+        if miembro_reclamante.status not in ("member", "administrator", "creator"):
+            return await update.message.reply_text("❌ Debes estar en el grupo para reclamar.")
+
+        if invitado:
+            invitado_data = await context.bot.get_chat_member(GRUPO_ID, invitado.replace("@", ""))
+            if invitado_data.status not in ("member", "administrator", "creator"):
+                return await update.message.reply_text("❌ Tu invitado no está en el grupo.")
+    except:
+        return await update.message.reply_text("❌ No se pudo verificar la membresía del grupo.")
 
     cantidad = 200 if invitado else 50
     tx_hash = enviar_tokens(wallet, cantidad)
@@ -157,10 +170,9 @@ async def procesar_reclamo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guardar_claims()
 
     await update.message.reply_text(
-        f"✅ {cantidad} Vyrax enviados a {wallet}.\n🧾 TX: https://bscscan.com/tx/{tx_hash}"
-    )
+        f"✅ {cantidad} Vyrax enviados a {wallet}.\n🧾 TX: https://bscscan.com/tx/{tx_hash}")
 
-    resumen = f"{'🚀' if cantidad == 200 else '🎉'} @{username} acaba de reclamar {cantidad} Vyrax"
+    resumen = f"{'🚀' if cantidad == 200 else '🎉'} @{username} reclamó {cantidad} Vyrax"
     resumen += f" {'(compra + invitación)' if cantidad == 200 else '(solo compra)'}\n📦 Wallet: {wallet}"
     if invitado:
         resumen += f"\n👥 Invitó a: {invitado}"
@@ -169,6 +181,12 @@ async def procesar_reclamo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     quedan = MAX_REWARDS - claims["total"]
     await update.message.reply_text(f"🎁 Quedan {quedan} recompensas disponibles.")
+
+async def borrar_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text:
+        texto = update.message.text.lower()
+        if "http" in texto or "t.me/" in texto or "@" in texto and not texto.startswith("0x"):
+            await update.message.delete()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await bienvenida(update, context)
@@ -179,10 +197,12 @@ def main():
     app_bot.add_handler(CommandHandler("estado", estado))
     app_bot.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, bienvenida))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, procesar_reclamo))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, borrar_spam))
     print("✅ Bot Vyrax corriendo...")
     app_bot.run_polling()
 
 # ========== FLASK PARA RENDER ==========
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -192,7 +212,6 @@ def home():
 def mantener_vivo():
     app.run(host='0.0.0.0', port=8080)
 
-# ========== EJECUCIÓN ==========
 if __name__ == "__main__":
     Thread(target=mantener_vivo).start()
     main()

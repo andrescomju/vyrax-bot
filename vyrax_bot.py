@@ -116,19 +116,16 @@ async def procesar_reclamo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     partes = mensaje.split()
 
     if claims["total"] >= MAX_REWARDS:
-        return  # Solo da la bienvenida, no procesa más
+        return
 
     if uid in claims["usuarios"]:
         return await update.message.reply_text("⚠️ Ya reclamaste tu recompensa.")
 
-    if len(partes) < 1:
-        return await update.message.reply_text("⚠️ Envía tu wallet y @ del invitado si aplica.")
+    if len(partes) < 1 or not partes[0].startswith("0x") or len(partes[0]) != 42:
+        return  # Ignorar mensajes que no contienen una wallet válida
 
     wallet = partes[0]
     invitado = partes[1] if len(partes) > 1 else None
-
-    if not wallet.startswith("0x") or len(wallet) != 42:
-        return await update.message.reply_text("❌ Dirección de wallet inválida.")
 
     if invitado == f"@{username}":
         return await update.message.reply_text("❌ No puedes invitarte a ti mismo.")
@@ -143,7 +140,6 @@ async def procesar_reclamo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(
             f"❌ Tu wallet solo tiene {balance:.2f} Vyrax. Necesitas al menos 700.")
 
-    # Verificar que ambos estén en el grupo
     try:
         miembro_reclamante = await context.bot.get_chat_member(GRUPO_ID, update.effective_user.id)
         if miembro_reclamante.status not in ("member", "administrator", "creator"):
